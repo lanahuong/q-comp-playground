@@ -1,0 +1,248 @@
+#+TITLE: Quantum walk
+#+AUTHOR: Lana Huong Scravaglieri
+#+DATE: 2 mar 2023
+
+#+NAME: attr_wrap
+#+BEGIN_SRC sh :var data="" :var width=200 :results drawer :export none
+echo "#+ATTR_ORG: :width $width"
+echo "[[file:$data]]"
+#+END_SRC
+
+#+RESULTS: attr_wrap
+:results:
+#+ATTR_ORG: :width 200
+[[file:]]
+:end:
+
+
+#+BEGIN_SRC emacs-lisp :session python :results none :eval query
+(pyvenv-activate "venv")
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results none :eval query :tangle yes
+import qiskit as qk
+import qiskit.tools.visualization as visu
+from qiskit.tools.visualization import plot_state_city
+import matplotlib.pyplot as plt
+import math
+#+END_SRC
+
+* Hadamar's walk in theory
+
+** Variables :
+- ~|c> = |0>~ the coin
+- ~|x> = |0>~ the position
+
+** Algorithm:
+1. ~|c> = H|c>~
+2. if c = 1 ~|x>++~ else ~|x>--~
+3. Repeat 2 and 3 t times
+
+** Superposition and relationship between $n$ and $t$
+Thanks to quantum superposition we can execute the walk $n$ times in one single
+execution by using $n$ qubits. There is however a constraint on $n$.
+
+The walk is on $Z|Z^{n+1}$ which needs to look like $Z$.
+
+If we want to measure at time $t$, on $Z$, the possible positions are in the
+range $[-t;t]$ of size $2t$. With $n$ qubits we can represent a range of $2^n$.
+
+This is why we need $2^n \ge 2t$, to represent the whole range of possible
+positions. So $(n-1) \ge \log_2(t)$ and $n \ge \log_2(t)+1$.
+
+
+* Hadamar's walk in practice
+
+** Increment and decrement operations
+
+Here we build the increment and decrement operators and check what their circuits
+look like with 4 qubits.
+
+*** Increment
+
+The idea of this simple and unoptimized incrementer is to flip a bit only if
+all preceding bits are 1, starting from the highest weight bit. The lowest
+weight bit is fliped at the end no matter what.
+
+#+BEGIN_SRC python :session python :results none :tangle yes
+def build_increment_op(n, circ=False):
+    inc_op_circ = qk.QuantumCircuit(qk.QuantumRegister(n, "x"))
+    for i in range(n-1, 0, -1):
+        inc_op_circ.mcx([*range(i)], i, None, "noancilla")
+    inc_op_circ.x(0)
+    if circ:
+        return inc_op_circ
+    return inc_op_circ.to_gate(label="S++").control(1)
+#+END_SRC
+
+#+HEADER: :post attr_wrap(data=*this*)
+#+BEGIN_SRC python :session python :results drawer :tangle no
+inc_circuit = build_increment_op(4, True)
+inc_circuit.draw("mpl", filename="inc_circuit.png")
+plt.clf()
+"inc_circuit.png"
+#+END_SRC
+
+#+RESULTS:
+:results:
+#+ATTR_ORG: :width 200
+[[file:inc_circuit.png]]
+:end:
+
+*** Decrementer
+
+The decrementer is the exact reverse of the incrementer.
+
+#+BEGIN_SRC python :session python :results none :tangle yes
+def build_decrement_op(n, circ=False):
+    dec_op_circ = qk.QuantumCircuit(qk.QuantumRegister(n, "x"))
+    dec_op_circ.x(0)
+    for i in range(1, n):
+        dec_op_circ.mcx([*range(i)], i, None, "noancilla")
+    if circ:
+        return dec_op_circ
+    return dec_op_circ.to_gate(label="S--").control(1)
+#+END_SRC
+
+#+HEADER: :post attr_wrap(data=*this*)
+#+BEGIN_SRC python :session python :results drawer :tangle no
+dec_circuit = build_decrement_op(4, True)
+dec_circuit.draw("mpl", filename="dec_circuit.png")
+plt.clf()
+"dec_circuit.png"
+#+END_SRC
+
+#+RESULTS:
+:results:
+#+ATTR_ORG: :width 200
+[[file:dec_circuit.png]]
+:end:
+
+
+** One quantum step
+
+Here we create the circuit of one quantum step for $n$ qubits : toss a coin with
+the Hadamar operator then increment or decrement accordingly.
+
+#+BEGIN_SRC python :session python :results none :tangle yes
+def build_step_cicuit(n):
+    # circuit with 1 control qbit and n position qubits and n measure classical bits
+    cb = qk.QuantumRegister(1, "c")
+    xb = qk.QuantumRegister(n, "x")
+    step_circuit = qk.QuantumCircuit(cb, xb, name="Q-step")
+
+    # Get operators
+    inc_op = build_increment_op(n)
+    dec_op = build_decrement_op(n)
+
+    # build one iteration of the walk
+    step_circuit.h(0)
+    step_circuit.append(inc_op, [*range(n+1)])
+    step_circuit.x(0)
+    step_circuit.append(dec_op, [*range(n+1)])
+    step_circuit.x(0)
+
+    return step_circuit
+#+END_SRC
+
+#+HEADER: :post attr_wrap(data=*this*, width=300)
+#+BEGIN_SRC python :session python :results drawer :tangle no
+step_circuit = build_step_cicuit(4)
+step_circuit.draw("mpl", filename="step_circuit.png")
+plt.clf()
+"step_circuit.png"
+#+END_SRC
+
+#+RESULTS:
+:results:
+#+ATTR_ORG: :width 300
+[[file:step_circuit.png]]
+:end:
+
+
+** Complete walk
+
+With the previous elements we can now build the entire walk for $n$ qubits and $t$
+steps. We assume that $n$ and $t$ are valid, meaning they verify the relationship
+demonstrated above.
+
+We add classical registers to contain the measures at the end of the
+computation.  The NOT on the most significant bit serves to shift the 0to the
+middle of the range that we can represent.
+
+#+BEGIN_SRC python :session python :results none :tangle yes
+def build_walk_cicuit(n, t):
+    step_circuit = build_step_cicuit(n)
+
+    cb = qk.QuantumRegister(1, "c")
+    xb = qk.QuantumRegister(n, "x")
+    mb = qk.ClassicalRegister(n, "m")
+    walk_circuit = qk.QuantumCircuit(cb, xb, mb)
+    walk_circuit.x(n)
+    walk_circuit = walk_circuit.compose(step_circuit.repeat(t))
+    for i in range(n):
+        walk_circuit.measure(qubit=i+1, cbit=i)
+    return walk_circuit
+#+END_SRC
+
+Example circuit with 2 qubits and 7 steps :
+
+#+HEADER: :post attr_wrap(data=*this*, width=600)
+#+BEGIN_SRC python :session python :results drawer :tangle no
+walk_circuit = build_walk_cicuit(2,7)
+walk_circuit.draw("mpl", filename="walk_circuit.png")
+plt.clf()
+"walk_circuit.png"
+#+END_SRC
+
+#+RESULTS:
+:results:
+#+ATTR_ORG: :width 600
+[[file:walk_circuit.png]]
+:end:
+
+
+** 50 steps quantum walk
+
+Now we create the circuit for 50 steps and simulate its execution. We ensure the $n$
+the number of qubits is valid.
+
+#+BEGIN_SRC python :session python :results none :tangle yes
+t = 50
+n = math.ceil(math.log(t)/math.log(2)+2)
+walk_circuit = build_walk_cicuit(n,t)
+simulator = qk.Aer.get_backend("aer_simulator")
+circ = qk.transpile(walk_circuit, simulator)
+result = simulator.run(circ).result()
+#+END_SRC
+
+Distribution of the postions after 50 steps :
+#+HEADER: :post attr_wrap(data=*this*, width=500)
+#+BEGIN_SRC python :session python :results drawer :tangle yes
+counts = result.get_counts(circ)
+hist = visu.plot_distribution(counts, figsize=(7, 6), title=f'Hadamard Walk after {t} steps sur Z/2^{n}Z', filename="hist.png")
+plt.clf()
+"hist.png"
+#+END_SRC
+
+#+RESULTS:
+:results:
+#+ATTR_ORG: :width 500
+[[file:hist.png]]
+:end:
+
+
+*** Explanations
+
+For a classical random walk the distribution a gaussian curve.
+
+In the quantum walk, when two decrements happen in a row there is a phase flip
+which favors interferances. Thus, toward 0 where we expect to have a high
+probablity of presence it is equally likely that a phase flip occured or not
+(even multiple phase flip) and therefor *destructive* interferences (between
+opposite phases) reduce de probability of presence. Toward the edges the number
+of phase flips is more likely to be the same, leading to *constructive*
+interferences (between same phases) and a higher probablility of presence.
+
+The asymetrie of the distribution is due to the asymetry of the phase flip event,
+which only happens when two successive decrements occur and *not* when two successive increment occur.
