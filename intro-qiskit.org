@@ -1,0 +1,155 @@
+#+TITLE: Intro to qiskit
+
+#+NAME: attr_wrap
+#+BEGIN_SRC sh :var data=""
+echo "#+ATTR_ORG: :width 100"
+echo "$data"
+#+END_SRC
+
+#+BEGIN_SRC emacs-lisp :session python :results none :eval query
+(pyvenv-activate "venv")
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results none :eval query
+import qiskit as qk
+import qiskit.tools.visualization as visu
+from qiskit.tools.visualization import plot_state_city
+import matplotlib.pyplot as plt
+import seaborn as sns
+import math
+#+END_SRC
+
+* Hadamar's walk
+
+1. ~|c> = |0>~ the coin and ~|x> = |0>~ the position
+2. ~|c> = H|c>~
+3. if c = 1 ~|x>++~ else ~|x>--~
+4. Repeat 2 and 3 n times
+
+The walk is on $Z/Z^{n+1}$ which must look like $Z$.
+If we want to measure at time t, on $Z$ the possible
+positions are in the range $[-t;t]$ of size $2t$.
+We need $2^n >= 2t$ or $(n-1) >= \log_2(t)$.
+
+#+BEGIN_SRC python :session python :results none
+def build_increment_op(n, circ=False):
+    inc_op_circ = qk.QuantumCircuit(qk.QuantumRegister(n, "x"))
+    for i in range(n-1, 0, -1):
+        inc_op_circ.mcx([*range(i)], i, None, "noancilla")
+    inc_op_circ.x(0)
+    if circ:
+        return inc_op_circ
+    return inc_op_circ.to_gate(label="S++").control(1)
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results file
+inc_circuit = build_increment_op(4, True)
+inc_circuit.draw("mpl", filename="inc_circuit.png")
+plt.clf()
+"inc_circuit.png"
+#+END_SRC
+
+#+attr_org: :width 200
+#+RESULTS:
+[[file:inc_circuit.png]]
+
+#+BEGIN_SRC python :session python :results none
+def build_decrement_op(n, circ=False):
+    dec_op_circ = qk.QuantumCircuit(qk.QuantumRegister(n, "x"))
+    dec_op_circ.x(0)
+    for i in range(1, n):
+        dec_op_circ.mcx([*range(i)], i, None, "noancilla")
+    if circ:
+        return dec_op_circ
+    return dec_op_circ.to_gate(label="S--").control(1)
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results file
+dec_circuit = build_decrement_op(4, True)
+dec_circuit.draw("mpl", filename="dec_circuit.png")
+plt.clf()
+"dec_circuit.png"
+#+END_SRC
+
+#+attr_org: :width 200
+#+RESULTS:
+[[file:dec_circuit.png]]
+
+#+BEGIN_SRC python :session python :results none
+def build_step_cicuit(n):
+    # circuit with 1 control qbit and n position qubits and n measure classical bits
+    cb = qk.QuantumRegister(1, "c")
+    xb = qk.QuantumRegister(n, "x")
+    mb = qk.ClassicalRegister(n, "m")
+    step_circuit = qk.QuantumCircuit(cb, xb, mb)
+
+    # Get operators
+    inc_op = build_increment_op(n)
+    dec_op = build_decrement_op(n)
+
+    # build one iteration of the walk
+    step_circuit.h(0)
+    step_circuit.append(inc_op, [*range(n+1)])
+    step_circuit.x(0)
+    step_circuit.append(dec_op, [*range(n+1)])
+    step_circuit.x(0)
+
+    return step_circuit
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results file
+step_circuit = build_step_cicuit(4)
+step_circuit.draw("mpl", filename="step_circuit.png")
+plt.clf()
+"step_circuit.png"
+#+END_SRC
+
+#+attr_org: :width 300
+#+RESULTS:
+[[file:step_circuit.png]]
+
+#+BEGIN_SRC python :session python :results none
+def build_walk_cicuit(n, t):
+    step_circuit = build_step_cicuit(n)
+
+    cb = qk.QuantumRegister(1, "c")
+    xb = qk.QuantumRegister(n, "x")
+    mb = qk.ClassicalRegister(n, "m")
+    walk_circuit = qk.QuantumCircuit(cb, xb, mb)
+    walk_circuit.x(n)
+    walk_circuit = walk_circuit.compose(step_circuit.repeat(t))
+    for i in range(n):
+        walk_circuit.measure(qubit=i+1, cbit=i)
+    return walk_circuit
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results file
+walk_circuit = build_walk_cicuit(2,7)
+walk_circuit.draw("mpl", filename="walk_circuit.png")
+plt.clf()
+"walk_circuit.png"
+#+END_SRC
+
+#+attr_org: :width 400
+#+RESULTS:
+[[file:walk_circuit.png]]
+
+#+BEGIN_SRC python :session python :results none
+t = 50
+n = math.ceil(math.log(t)/math.log(2)+2)
+walk_circuit = build_walk_cicuit(n,t)
+simulator = qk.Aer.get_backend("aer_simulator")
+circ = qk.transpile(walk_circuit, simulator)
+result = simulator.run(circ).result()
+#+END_SRC
+
+#+BEGIN_SRC python :session python :results file
+counts = result.get_counts(circ)
+hist = visu.plot_distribution(counts, figsize=(7, 6), title=f'Hadamard Walk after {t} steps sur Z/2^{n}Z', filename="hist.png")
+plt.clf()
+"hist.png"
+#+END_SRC
+
+#+attr_org: :width 400
+#+RESULTS:
+[[file:hist.png]]
