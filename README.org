@@ -1,0 +1,13 @@
+#+title: README
+
+* Usage
+
+You need a python virtual environment to execute the scripts and org files.
+
+Assuming you are a Linux user you can run the following commands in this repository :
+
+#+BEGIN_SRC sh
+python3 -m venv venv
+source venv/bin/activate
+pip install wheel qiskit "qiskit[visualization]"
+#+END_SRC
